@@ -6,7 +6,7 @@
 
   A High Dynamic Range (HDR) image contains a wider variation of intensity
   and color than is allowed by the RGB format with 1 byte per channel that we
-  have used in the previous assignment.  
+  have used in the previous assignment.
 
   To store this extra information we use single precision floating point for
   each channel.  This allows for an extremely wide range of intensity values.
@@ -53,7 +53,7 @@
   Old TV signals used to be transmitted in this way so that black & white
   televisions could display the luminance channel while color televisions would
   display all three of the channels.
-  
+
 
   Tone-mapping
   ============
@@ -92,7 +92,30 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
   //TODO
   /*Here are the steps you need to implement
     1) find the minimum and maximum value in the input logLuminance channel
-       store in min_logLum and max_logLum
+       store in min_logLum and max_logLum */
+       unsigned int total_size = 1024*1024;
+       const float* l_image_data;
+       const float* d_image_data;
+       const int n_rows = (int)numRows;
+       const int n_cols = (int)numCols;
+       const int n_threads = 1024;
+       const int n_blocks = 1024;
+
+       l_image_data = (*float)malloc(total_size);
+       memset(l_image_data, 0.0, sizeof(l_image_data));
+
+       for(int i=0; i < (n_rows*n_cols) ; i++)
+       l_image_data[i] = d_logLuminance[i];
+
+
+       cudamalloc(d_image_data, total_size); // cross-check this against some other code snippet from the course
+
+// call kernel: recall how to write a kernel that uses shared memory.
+// similar procedure for finding minimum. actually, both of them can be done in the same reduce operation, I think. Simply define a
+// 2^20 by 2 sized array. This should do the trick.
+
+
+  /*
     2) subtract them to find the range
     3) generate a histogram of all the values in the logLuminance channel using
        the formula: bin = (lum[i] - lumMin) / lumRange * numBins
@@ -102,3 +125,5 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
 
 }
+
+//__global__
