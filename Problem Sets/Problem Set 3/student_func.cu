@@ -94,34 +94,66 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     1) find the minimum and maximum value in the input logLuminance channel
        store in min_logLum and max_logLum */
        unsigned int total_size = 1024*1024;
-       const float* l_image_data;
-       const float* d_image_data;
-       const int n_rows = (int)numRows;
+       const float* 
+       const float* d_image_data, d_image_data2;
+       const float* d_min_intermediate, d_max_intermediate;
+	   const float* d_min, d_max;
+	   const int n_rows = (int)numRows;
        const int n_cols = (int)numCols;
        const int n_threads = 1024;
        const int n_blocks = 1024;
 
-       l_image_data = (*float)malloc(total_size);
-       memset(l_image_data, 0.0, sizeof(l_image_data));
+// 2 seperate arrays for min and max computation.	   
+       cudaMalloc((void **) &d_image_data, total_size*sizeof(float)); 
+       cudaMalloc((void **) &d_image_data2, total_size*sizeof(float));
+	   
+	   
+// zero-padding to ensure total size is a power of 2	   
+	   cudaMemset((void *) &d_image_data,(int) 0.0 ,(size_t) total_size);
+	   cudaMemset((void *) &d_image_data2,(int) 0.0 ,(size_t) total_size);	   
+	   for(int i=0; i < (n_rows*n_cols) ; i++){
+	   d_image_data[i] = d_logLuminance[i];
+	   d_image_data2[i] = d_logLuminance[i];
+	   }
+	   
+// allocate memory for intermediate arrays and the final result pointers.
+	   
+	   cudaMalloc((void **) &d_min_intermediate, n_threads * sizeof(float));
+	   cudaMalloc((void **) &d_max_intermediate, n_threads * sizeof(float));
+	   cudaMalloc((void **) &d_min, 1 * sizeof(float));	
+	   cudaMalloc((void **) &d_max, 1 * sizeof(float));
 
-       for(int i=0; i < (n_rows*n_cols) ; i++)
-       l_image_data[i] = d_logLuminance[i];
+	   
+		 min_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data, &d_min_intermediate);	
+		 max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data2, &d_max_intermediate);
+
+// free up memory
 
 
-       cudamalloc(d_image_data, total_size); // cross-check this against some other code snippet from the course
+	 n_blocks = 1;
+	
+//	 second run of the min, max kernels:
+	 min_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_min_intermediate, &d_min);	
+	 max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_max_intermediate, &d_max);
 
-// call kernel: recall how to write a kernel that uses shared memory.
-// similar procedure for finding minimum. actually, both of them can be done in the same reduce operation, I think. Simply define a
-// 2^20 by 2 sized array. This should do the trick.
+	cudaMemcpy((void *) &min_logLum,(void *)&d_min, sizeof(float), cudaMemcpyDeviceToHost);
+	cudaMemcpy((void *) &max_logLum,(void *)&d_max, sizeof(float), cudaMemcpyDeviceToHost); 
 
-
-  /*
-    2) subtract them to find the range
-    3) generate a histogram of all the values in the logLuminance channel using
-       the formula: bin = (lum[i] - lumMin) / lumRange * numBins
-    4) Perform an exclusive scan (prefix sum) on the histogram to get
-       the cumulative distribution of luminance values (this should go in the
-       incoming d_cdf pointer which already has been allocated for you)       */
+	
+  
+   //  2) subtract them to find the range
+   
+   const float range = max_logLum - min_logLum;
+   
+   
+   
+   //  3) generate a histogram of all the values in the logLuminance channel using
+   //     the formula: bin = (lum[i] - lumMin) / lumRange * numBins
+   
+	simple_histo(int *d_bins, const int *d_in, const int BIN_COUNT);
+   // 4) Perform an exclusive scan (prefix sum) on the histogram to get
+   //    the cumulative distribution of luminance values (this should go in the
+   //   incoming d_cdf pointer which already has been allocated for you)       
 
 
 }
