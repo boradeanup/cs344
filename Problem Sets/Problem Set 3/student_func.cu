@@ -81,6 +81,77 @@
 
 #include "utils.h"
 
+// kernel for finding minimum using a reduce operation
+// largely borrowed from reduce code snippet of Lesson 3.
+// only the operand is changed from '+' to 'min'
+// this may not work because I'm trying to change the value of a const float.
+
+__shared__min_kernel(const float * d_inputlist,const float * d_reduce_op)
+{// sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
+extern __shared__ float sdata[];
+
+int myId = threadIdx.x + blockDim.x * blockIdx.x;
+int tid  = threadIdx.x;
+
+// load shared mem from global mem
+sdata[tid] = d_inputlist[myId];
+__syncthreads();            // make sure entire block is loaded!
+
+// do reduction in shared mem
+for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
+{
+    if (tid < s)
+    {
+        sdata[tid] = (sdata[tid] > sdata[tid+s])?sdata[tid + s]:sdata[tid];
+    }
+    __syncthreads();        // make sure all adds at one stage are done!
+}
+
+// only thread 0 writes result for this block back to global mem
+if (tid == 0)
+{
+    d_reduce_op[blockIdx.x] = sdata[0];
+}
+}
+
+__shared__max_kernel(const float * d_inputlist,const float * d_reduce_op)
+{// sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
+extern __shared__ float sdata[];
+
+int myId = threadIdx.x + blockDim.x * blockIdx.x;
+int tid  = threadIdx.x;
+
+// load shared mem from global mem
+sdata[tid] = d_inputlist[myId];
+__syncthreads();            // make sure entire block is loaded!
+
+// do reduction in shared mem
+for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
+{
+    if (tid < s)
+    {
+        sdata[tid] = (sdata[tid] < sdata[tid+s])?sdata[tid + s]:sdata[tid];
+    }
+    __syncthreads();        // make sure all adds at one stage are done!
+}
+
+// only thread 0 writes result for this block back to global mem
+if (tid == 0)
+{
+    d_reduce_op[blockIdx.x] = sdata[0];
+}
+}
+
+//again, the histo code snippet was used for this-
+__global__ void atomic_histo(int *d_bins,const float* d_image,float *min_L,const size_t N_bin,const float * lumRange)
+{
+  int myId = threadIdx.x + blockDim.x * blockIdx.x;
+  int tid  = threadIdx.x;
+  int bin = (d_image[myId] - min_L) / lumRange * N_bin;
+  atomicAdd(&(d_bins[bin]), 1);
+}
+
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -94,66 +165,71 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     1) find the minimum and maximum value in the input logLuminance channel
        store in min_logLum and max_logLum */
        unsigned int total_size = 1024*1024;
-       const float* 
        const float* d_image_data, d_image_data2;
        const float* d_min_intermediate, d_max_intermediate;
-	   const float* d_min, d_max;
-	   const int n_rows = (int)numRows;
+	     const float* d_min, d_max;
+	     const int n_rows = (int)numRows;
        const int n_cols = (int)numCols;
        const int n_threads = 1024;
        const int n_blocks = 1024;
+       int * d_histogram;
 
-// 2 seperate arrays for min and max computation.	   
-       cudaMalloc((void **) &d_image_data, total_size*sizeof(float)); 
+
+// 2 seperate arrays for min and max computation.
+       cudaMalloc((void **) &d_image_data, total_size*sizeof(float));
        cudaMalloc((void **) &d_image_data2, total_size*sizeof(float));
-	   
-	   
-// zero-padding to ensure total size is a power of 2	   
+
+
+// zero-padding to ensure total size is a power of 2
 	   cudaMemset((void *) &d_image_data,(int) 0.0 ,(size_t) total_size);
-	   cudaMemset((void *) &d_image_data2,(int) 0.0 ,(size_t) total_size);	   
+	   cudaMemset((void *) &d_image_data2,(int) 0.0 ,(size_t) total_size);
 	   for(int i=0; i < (n_rows*n_cols) ; i++){
 	   d_image_data[i] = d_logLuminance[i];
 	   d_image_data2[i] = d_logLuminance[i];
 	   }
-	   
+
 // allocate memory for intermediate arrays and the final result pointers.
-	   
+
 	   cudaMalloc((void **) &d_min_intermediate, n_threads * sizeof(float));
 	   cudaMalloc((void **) &d_max_intermediate, n_threads * sizeof(float));
-	   cudaMalloc((void **) &d_min, 1 * sizeof(float));	
+	   cudaMalloc((void **) &d_min, 1 * sizeof(float));
 	   cudaMalloc((void **) &d_max, 1 * sizeof(float));
 
-	   
-		 min_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data, &d_min_intermediate);	
+
+		 min_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data, &d_min_intermediate);
 		 max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data2, &d_max_intermediate);
 
 // free up memory
 
+// this might also give some error, because I'm modifying a const int
+//	 n_blocks = 1;
 
-	 n_blocks = 1;
-	
 //	 second run of the min, max kernels:
-	 min_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_min_intermediate, &d_min);	
-	 max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_max_intermediate, &d_max);
+	 min_kernel <<< n_threads, 1, n_threads * sizeof(float)>>> (&d_min_intermediate, &d_min);
+	 max_kernel <<< n_threads, 1, n_threads * sizeof(float)>>> (&d_max_intermediate, &d_max);
 
 	cudaMemcpy((void *) &min_logLum,(void *)&d_min, sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy((void *) &max_logLum,(void *)&d_max, sizeof(float), cudaMemcpyDeviceToHost); 
+	cudaMemcpy((void *) &max_logLum,(void *)&d_max, sizeof(float), cudaMemcpyDeviceToHost);
 
-	
-  
+
+// Probably should clear out GPU memory. except for d_logLuminance.
+
    //  2) subtract them to find the range
-   
+
    const float range = max_logLum - min_logLum;
-   
-   
-   
+
+
+   // allocate memory for histogram
+   cudaMalloc((void **) &d_histogram, numBins*sizeof(float));
    //  3) generate a histogram of all the values in the logLuminance channel using
    //     the formula: bin = (lum[i] - lumMin) / lumRange * numBins
-   
-	simple_histo(int *d_bins, const int *d_in, const int BIN_COUNT);
+
+	atomic_histo <<<n_threads ,n_blocks>>> (d_histogram,d_logLuminance,min_logLum,numBins,range);
+
+
    // 4) Perform an exclusive scan (prefix sum) on the histogram to get
    //    the cumulative distribution of luminance values (this should go in the
-   //   incoming d_cdf pointer which already has been allocated for you)       
+   //   incoming d_cdf pointer which already has been allocated for you)
 
 
 }
