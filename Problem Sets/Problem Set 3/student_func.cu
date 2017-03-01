@@ -143,7 +143,7 @@ if (tid == 0)
 }
 
 //again, the histo code snippet was used for this-
-__global__ void atomic_histo(int *d_bins,float* d_image,float *min_L,const size_t N_bin,float * lumRange)
+__global__ void atomic_histo(unsigned *d_bins,const float* const d_image,float *min_L,const size_t N_bin,float * lumRange)
 {
   int myId = threadIdx.x + blockDim.x * blockIdx.x;
   int tid  = threadIdx.x;
@@ -151,7 +151,7 @@ __global__ void atomic_histo(int *d_bins,float* d_image,float *min_L,const size_
   atomicAdd(&(d_bins[bin]), 1);
 }
 
-__global__ void belloch_scan_reduce(int* d_array)
+__global__ void belloch_scan_reduce(unsigned int* d_array)
 {
   int myId = threadIdx.x + blockDim.x * blockIdx.x;
   int tid  = threadIdx.x;
@@ -169,7 +169,7 @@ __global__ void belloch_scan_reduce(int* d_array)
 
 }
 
-__global__ void belloch_scan_downsweep(int* d_array)
+__global__ void belloch_scan_downsweep(unsigned int* d_array)
 {
   int myId = threadIdx.x + blockDim.x * blockIdx.x;
   int tid  = threadIdx.x;
@@ -203,27 +203,28 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     1) find the minimum and maximum value in the input logLuminance channel
        store in min_logLum and max_logLum */
        unsigned int total_size = 1024*1024;
-       float* d_image_data, d_image_data2;
-       float* d_min_intermediate, d_max_intermediate;
-	   float* d_min, d_max;
+       float *d_image_data;
+       float *d_image_data_two;
+       float *d_min_intermediate, *d_max_intermediate;
+	   float *d_min, *d_max;
 	   const int n_rows = (int)numRows;
        const int n_cols = (int)numCols;
        const int n_threads = 1024;
        const int n_blocks = 1024;
-       int * d_histogram;
+       unsigned int * d_histogram;
 
 
 // 2 seperate arrays for min and max computation.
        cudaMalloc((void **) &d_image_data, total_size*sizeof(float));
-       cudaMalloc((void **) &d_image_data2, total_size*sizeof(float));
+       cudaMalloc((void **) &d_image_data_two, total_size*sizeof(float));
 
 
 // zero-padding to ensure total size is a power of 2
 	   cudaMemset((void *) &d_image_data,(int) 0.0 ,(size_t) total_size);
-	   cudaMemset((void *) &d_image_data2,(int) 0.0 ,(size_t) total_size);
+	   cudaMemset((void *) &d_image_data_two,(int) 0.0 ,(size_t) total_size);
 	   for(int i=0; i < (n_rows*n_cols) ; i++){
-	   d_image_data[i] = d_logLuminance[i];
-	   d_image_data2[i] = d_logLuminance[i];
+	   d_image_data[i] = (float)d_logLuminance[i];
+	   d_image_data_two[i] = (float)d_logLuminance[i];
 	   }
 
 // allocate memory for intermediate arrays and the final result pointers.
@@ -234,8 +235,8 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	   cudaMalloc((void **) &d_max, 1 * sizeof(float));
 
 
-min_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data, &d_min_intermediate);
-max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data2,&d_max_intermediate);
+min_kernel <<<n_blocks, n_threads, n_threads * sizeof(float)>>> (d_image_data, d_min_intermediate);
+max_kernel <<<n_blocks, n_threads, n_threads * sizeof(float)>>> (d_image_data_two,d_max_intermediate);
 
 // free up memory
 
@@ -243,8 +244,8 @@ max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data2
 //	 n_blocks = 1;
 
 //	 second run of the min, max kernels:
-	 min_kernel <<< n_threads, 1, n_threads * sizeof(float)>>> (d_min_intermediate,d_min);
-	 max_kernel <<< n_threads, 1, n_threads * sizeof(float)>>> (d_max_intermediate,d_max);
+	 min_kernel <<< 1, n_threads, n_threads * sizeof(float)>>> (d_min_intermediate,d_min);
+	 max_kernel <<< 1, n_threads, n_threads * sizeof(float)>>> (d_max_intermediate,d_max);
 
 	cudaMemcpy((void *) &min_logLum,(void *)&d_min, sizeof(float), cudaMemcpyDeviceToHost);
 	cudaMemcpy((void *) &max_logLum,(void *)&d_max, sizeof(float), cudaMemcpyDeviceToHost);
@@ -254,15 +255,15 @@ max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data2
 
    //  2) subtract them to find the range
 
-   const float range = max_logLum - min_logLum;
+   float range = max_logLum - min_logLum;
 
 
    // allocate memory for histogram
-   cudaMalloc((void **) &d_histogram, numBins*sizeof(float));
+   cudaMalloc((void **) &d_histogram, numBins*sizeof(unsigned int));
    //  3) generate a histogram of all the values in the logLuminance channel using
    //     the formula: bin = (lum[i] - lumMin) / lumRange * numBins
 
-	atomic_histo <<<n_threads ,n_blocks>>> (d_histogram,d_logLuminance,min_logLum,numBins,range);
+	atomic_histo <<<n_blocks, n_threads>>> (d_histogram,d_logLuminance,&min_logLum,numBins,&range);
 
 
    // 4) Perform an exclusive scan (prefix sum) on the histogram to get
@@ -270,8 +271,8 @@ max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data2
    //   incoming d_cdf pointer which already has been allocated for you)
   //   nBins in this specific problem is 1024 - checked via the udacity online dev env.
   //   this code will run only for a block of 1024 threads, therefore.
-belloch_scan_reduce <<<numBins,1>>> (d_histogram);
-belloch_scan_downsweep<<<numBins,1>>> (d_histogram);
+belloch_scan_reduce <<<1,numBins>>> (d_histogram);
+belloch_scan_downsweep<<<1,numBins>>> (d_histogram);
 d_cdf = d_histogram;
 
 }
