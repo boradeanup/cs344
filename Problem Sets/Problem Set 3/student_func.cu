@@ -86,7 +86,7 @@
 // only the operand is changed from '+' to 'min'
 // this may not work because I'm trying to change the value of a const float.
 
-__shared__min_kernel(const float * d_inputlist,const float * d_reduce_op)
+__global__ void min_kernel(float* d_inputlist,float* d_reduce_op)
 {// sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
 extern __shared__ float sdata[];
 
@@ -114,7 +114,7 @@ if (tid == 0)
 }
 }
 
-__shared__max_kernel(const float * d_inputlist,const float * d_reduce_op)
+__global__ void max_kernel(float* d_inputlist,float* d_reduce_op)
 {// sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
 extern __shared__ float sdata[];
 
@@ -143,11 +143,11 @@ if (tid == 0)
 }
 
 //again, the histo code snippet was used for this-
-__global__ void atomic_histo(int *d_bins,const float* d_image,float *min_L,const size_t N_bin,const float * lumRange)
+__global__ void atomic_histo(int *d_bins,float* d_image,float *min_L,const size_t N_bin,float * lumRange)
 {
   int myId = threadIdx.x + blockDim.x * blockIdx.x;
   int tid  = threadIdx.x;
-  int bin = (d_image[myId] - min_L) / lumRange * N_bin;
+  int bin = (d_image[myId] - (*min_L)) / (*lumRange) * N_bin;
   atomicAdd(&(d_bins[bin]), 1);
 }
 
@@ -158,7 +158,7 @@ __global__ void belloch_scan_reduce(int* d_array)
   int pow_2;
 
 // reduce step
-  for(pow_2=1,pow_2<1024,pow_2=pow_2*2)
+  for(pow_2=1;pow_2<1024;pow_2=pow_2*2)
   {
     if((tid+1) % (2*pow_2) == 0)
     {
@@ -174,16 +174,16 @@ __global__ void belloch_scan_downsweep(int* d_array)
   int myId = threadIdx.x + blockDim.x * blockIdx.x;
   int tid  = threadIdx.x;
   int pow_2;
-  int temp;
+  int tmp;
 
   d_array[1024] = 0;
 
   // downsweep step
-    for(pow_2=512,pow_2>1,pow_2=pow_2/2)
+    for(pow_2=512;pow_2>1;pow_2=pow_2/2)
     {
       if((tid+1) % (2*pow_2) == 0)
       {
-        d_array[tid - pow2] = tmp;
+        tmp = d_array[tid - pow_2];
         d_array[tid - pow_2] = d_array[tid];
         d_array[tid] = d_array[tid] + tmp;
       }
@@ -191,7 +191,7 @@ __global__ void belloch_scan_downsweep(int* d_array)
 }
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
-                                  unsigned int* const d_cdf,
+                                  unsigned int* d_cdf,
                                   float &min_logLum,
                                   float &max_logLum,
                                   const size_t numRows,
@@ -203,10 +203,10 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     1) find the minimum and maximum value in the input logLuminance channel
        store in min_logLum and max_logLum */
        unsigned int total_size = 1024*1024;
-       const float* d_image_data, d_image_data2;
-       const float* d_min_intermediate, d_max_intermediate;
-	     const float* d_min, d_max;
-	     const int n_rows = (int)numRows;
+       float* d_image_data, d_image_data2;
+       float* d_min_intermediate, d_max_intermediate;
+	   float* d_min, d_max;
+	   const int n_rows = (int)numRows;
        const int n_cols = (int)numCols;
        const int n_threads = 1024;
        const int n_blocks = 1024;
@@ -234,8 +234,8 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	   cudaMalloc((void **) &d_max, 1 * sizeof(float));
 
 
-		 min_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data, &d_min_intermediate);
-		 max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data2, &d_max_intermediate);
+min_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data, &d_min_intermediate);
+max_kernel <<< n_threads, n_blocks, n_threads * sizeof(float)>>> (&d_image_data2,&d_max_intermediate);
 
 // free up memory
 
@@ -243,8 +243,8 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 //	 n_blocks = 1;
 
 //	 second run of the min, max kernels:
-	 min_kernel <<< n_threads, 1, n_threads * sizeof(float)>>> (&d_min_intermediate, &d_min);
-	 max_kernel <<< n_threads, 1, n_threads * sizeof(float)>>> (&d_max_intermediate, &d_max);
+	 min_kernel <<< n_threads, 1, n_threads * sizeof(float)>>> (d_min_intermediate,d_min);
+	 max_kernel <<< n_threads, 1, n_threads * sizeof(float)>>> (d_max_intermediate,d_max);
 
 	cudaMemcpy((void *) &min_logLum,(void *)&d_min, sizeof(float), cudaMemcpyDeviceToHost);
 	cudaMemcpy((void *) &max_logLum,(void *)&d_max, sizeof(float), cudaMemcpyDeviceToHost);
