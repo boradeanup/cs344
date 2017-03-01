@@ -151,6 +151,44 @@ __global__ void atomic_histo(int *d_bins,const float* d_image,float *min_L,const
   atomicAdd(&(d_bins[bin]), 1);
 }
 
+__global__ void belloch_scan_reduce(int* d_array)
+{
+  int myId = threadIdx.x + blockDim.x * blockIdx.x;
+  int tid  = threadIdx.x;
+  int pow_2;
+
+// reduce step
+  for(pow_2=1,pow_2<1024,pow_2=pow_2*2)
+  {
+    if((tid+1) % (2*pow_2) == 0)
+    {
+      d_array[tid] = d_array[tid] + d_array[tid - pow_2];
+    }
+
+  }
+
+}
+
+__global__ void belloch_scan_downsweep(int* d_array)
+{
+  int myId = threadIdx.x + blockDim.x * blockIdx.x;
+  int tid  = threadIdx.x;
+  int pow_2;
+  int temp;
+
+  d_array[1024] = 0;
+
+  // downsweep step
+    for(pow_2=512,pow_2>1,pow_2=pow_2/2)
+    {
+      if((tid+1) % (2*pow_2) == 0)
+      {
+        d_array[tid - pow2] = tmp;
+        d_array[tid - pow_2] = d_array[tid];
+        d_array[tid] = d_array[tid] + tmp;
+      }
+    }
+}
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
@@ -230,7 +268,11 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
    // 4) Perform an exclusive scan (prefix sum) on the histogram to get
    //    the cumulative distribution of luminance values (this should go in the
    //   incoming d_cdf pointer which already has been allocated for you)
-
+  //   nBins in this specific problem is 1024 - checked via the udacity online dev env.
+  //   this code will run only for a block of 1024 threads, therefore.
+belloch_scan_reduce <<<numBins,1>>> (d_histogram);
+belloch_scan_downsweep<<<numBins,1>>> (d_histogram);
+d_cdf = d_histogram;
 
 }
 
